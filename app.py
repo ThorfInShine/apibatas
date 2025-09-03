@@ -623,12 +623,12 @@ def update_kunjungan_data(nama_wisata, jumlah_kunjungan, action='add'):
         return False
 
 class FixedH5ModelLoader:
-    """Optimized H5 model loader for production"""
+    """Optimized model loader for production - FIXED FOR JOBLIB FILES"""
     
     def __init__(self, models_dir):
         self.models_dir = models_dir
         self.label_encoder_classes = None
-        app.logger.info(f"🔧 Initializing H5 Model Loader from: {models_dir}")
+        app.logger.info(f"🔧 Initializing Model Loader from: {models_dir}")
         
         if not os.path.exists(models_dir):
             app.logger.warning(f"⚠️ Models directory not found: {models_dir}")
@@ -636,12 +636,46 @@ class FixedH5ModelLoader:
     
     @lru_cache(maxsize=1)
     def load_label_encoder(self, filepath=None):
-        """Load and cache label encoder"""
+        """Load and cache label encoder - FIXED FOR JOBLIB"""
         if filepath is None:
-            filepath = os.path.join(self.models_dir, 'label_encoder.h5')
+            # Try both .h5 and .joblib
+            h5_path = os.path.join(self.models_dir, 'label_encoder.h5')
+            joblib_path = os.path.join(self.models_dir, 'label_encoder.joblib')
+            
+            # Try joblib first (since that's what you have)
+            if os.path.exists(joblib_path):
+                try:
+                    app.logger.info(f"📂 Loading label encoder from: {joblib_path}")
+                    label_encoder = joblib.load(joblib_path)
+                    
+                    # Check if it's a LabelEncoder object
+                    if hasattr(label_encoder, 'classes_'):
+                        self.label_encoder_classes = label_encoder.classes_.tolist()
+                        app.logger.info(f"✅ Label encoder loaded from joblib: {self.label_encoder_classes}")
+                        return self.label_encoder_classes
+                    # Or if it's just the classes array
+                    elif isinstance(label_encoder, (list, np.ndarray)):
+                        self.label_encoder_classes = list(label_encoder)
+                        app.logger.info(f"✅ Label encoder classes loaded from joblib: {self.label_encoder_classes}")
+                        return self.label_encoder_classes
+                    else:
+                        app.logger.warning(f"⚠️ Unknown label encoder format: {type(label_encoder)}")
+                        
+                except Exception as e:
+                    app.logger.error(f"Error loading label encoder from joblib: {e}")
+            
+            # Fallback to h5 if exists
+            if os.path.exists(h5_path):
+                filepath = h5_path
+            else:
+                # No encoder found, use defaults
+                self.label_encoder_classes = ['negative', 'neutral', 'positive']
+                app.logger.warning("⚠️ No label encoder found, using defaults")
+                return self.label_encoder_classes
         
-        try:
-            if os.path.exists(filepath):
+        # Original h5 loading code
+        if filepath and os.path.exists(filepath):
+            try:
                 with h5py.File(filepath, 'r') as f:
                     classes_data = None
                     for key in ['classes', 'classes_', 'label_encoder_classes']:
@@ -657,48 +691,80 @@ class FixedH5ModelLoader:
                         
                         self.label_encoder_classes = classes
                         return classes
-        except Exception as e:
-            app.logger.error(f"Error loading label encoder: {e}")
+            except Exception as e:
+                app.logger.error(f"Error loading label encoder from h5: {e}")
         
         self.label_encoder_classes = ['negative', 'neutral', 'positive']
         return self.label_encoder_classes
     
     def load_sklearn_model(self, filepath, model_name):
-        """Load sklearn model with caching"""
+        """Load sklearn model - FIXED FOR JOBLIB"""
         try:
-            if not os.path.exists(filepath):
-                return None
+            # First, try to load the joblib file directly if it exists
+            if filepath.endswith('.joblib') and os.path.exists(filepath):
+                app.logger.info(f"📂 Loading {model_name} from joblib: {filepath}")
+                model = joblib.load(filepath)
+                app.logger.info(f"✅ {model_name} loaded successfully from joblib")
+                return model
             
-            with h5py.File(filepath, 'r') as f:
-                if 'joblib_compressed' in f:
+            # If filepath is for .h5, check if .joblib version exists
+            if filepath.endswith('.h5'):
+                # Direct replacement
+                joblib_path = filepath.replace('.h5', '.joblib')
+                
+                # Also try with different naming conventions
+                if 'tfidf_lr_model' in filepath:
+                    # This is your actual file name
+                    joblib_path = os.path.join(self.models_dir, 'tfidf_lr_pipeline.joblib')
+                elif 'random_forest_model' in filepath:
+                    joblib_path = os.path.join(self.models_dir, 'random_forest_pipeline.joblib')
+                
+                if os.path.exists(joblib_path):
+                    app.logger.info(f"📂 Loading {model_name} from joblib: {joblib_path}")
                     try:
-                        joblib_bytes = f['joblib_compressed'][:]
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.joblib') as tmp_file:
-                            tmp_file.write(joblib_bytes.tobytes())
-                            temp_path = tmp_file.name
-                        
-                        model = joblib.load(temp_path)
-                        os.unlink(temp_path)
+                        model = joblib.load(joblib_path)
+                        app.logger.info(f"✅ {model_name} loaded successfully from joblib")
                         return model
                     except Exception as e:
-                        app.logger.warning(f"Joblib load failed: {str(e)[:100]}")
-                
-                if 'full_pipeline_pickle' in f:
-                    try:
-                        pipeline_bytes = f['full_pipeline_pickle'][:]
-                        buffer = io.BytesIO(pipeline_bytes.tobytes())
-                        model = pickle.load(buffer)
-                        return model
-                    except Exception as e:
-                        app.logger.warning(f"Pickle load failed: {str(e)[:100]}")
-                
+                        app.logger.error(f"Failed to load joblib file {joblib_path}: {e}")
+                        return None
+            
+            # Try original h5 path if it exists
+            if os.path.exists(filepath):
+                app.logger.warning(f"Trying to load h5 file: {filepath}")
+                with h5py.File(filepath, 'r') as f:
+                    if 'joblib_compressed' in f:
+                        try:
+                            joblib_bytes = f['joblib_compressed'][:]
+                            with tempfile.NamedTemporaryFile(delete=False, suffix='.joblib') as tmp_file:
+                                tmp_file.write(joblib_bytes.tobytes())
+                                temp_path = tmp_file.name
+                            
+                            model = joblib.load(temp_path)
+                            os.unlink(temp_path)
+                            return model
+                        except Exception as e:
+                            app.logger.warning(f"Joblib load from h5 failed: {str(e)[:100]}")
+                    
+                    if 'full_pipeline_pickle' in f:
+                        try:
+                            pipeline_bytes = f['full_pipeline_pickle'][:]
+                            buffer = io.BytesIO(pipeline_bytes.tobytes())
+                            model = pickle.load(buffer)
+                            return model
+                        except Exception as e:
+                            app.logger.warning(f"Pickle load from h5 failed: {str(e)[:100]}")
+            else:
+                app.logger.warning(f"⚠️ Model file not found: {filepath}")
+            
+            return None
+            
         except Exception as e:
             app.logger.error(f"Error loading {model_name}: {e}")
-        
-        return None
+            return None
     
     def load_lstm_model(self, filepath=None):
-        """Load LSTM model if TensorFlow available - PERBAIKAN"""
+        """Load LSTM model if TensorFlow available"""
         if not TENSORFLOW_AVAILABLE:
             app.logger.warning("⚠️ TensorFlow not available - skipping LSTM model load")
             return None
@@ -740,7 +806,7 @@ class FixedH5ModelLoader:
                     app.logger.error(f"Failed to load TensorFlow model: {e}")
                     return None
             
-            # PERBAIKAN: Pastikan kedua komponen tersedia
+            # Ensure both components are available
             if tokenizer is not None and model is not None:
                 # Test the model with a simple prediction to ensure it works
                 try:
@@ -778,7 +844,379 @@ class FixedH5ModelLoader:
         
         return None
 
+
 class SmartEnsembleH5Fixed:
+    """Production-optimized ensemble model - FIXED FOR JOBLIB"""
+    
+    def __init__(self, models_dir=None):
+        if models_dir is None:
+            models_dir = app.config['MODEL_FOLDER']
+        
+        self.models_dir = models_dir
+        self.model_name = "Smart Ensemble H5 Fixed"
+        self.model_type = "h5_ensemble_fixed"
+        
+        self.h5_loader = FixedH5ModelLoader(models_dir)
+        
+        self.tfidf_lr = None
+        self.rf = None
+        self.lstm_data = None
+        self.label_encoder_classes = None
+        
+        self.tfidf_lr_ready = False
+        self.rf_ready = False
+        self.lstm_ready = False
+        
+        # Dynamic weights based on available models
+        self.use_manual_weights = True
+        self.ensemble_weights = [0, 0, 0]  # Will be set dynamically
+        
+        self.load_ensemble_components()
+    
+    def load_ensemble_components(self):
+        """Load all ensemble components - FIXED FOR YOUR JOBLIB FILES"""
+        try:
+            self.label_encoder_classes = self.h5_loader.load_label_encoder()
+            
+            # Load TF-IDF + LR - try both .h5 and .joblib
+            tfidf_h5_path = os.path.join(self.models_dir, 'tfidf_lr_model.h5')
+            tfidf_joblib_path = os.path.join(self.models_dir, 'tfidf_lr_pipeline.joblib')
+            
+            if os.path.exists(tfidf_joblib_path):
+                app.logger.info(f"📂 Found TF-IDF joblib file: {tfidf_joblib_path}")
+                try:
+                    self.tfidf_lr = joblib.load(tfidf_joblib_path)
+                    self.tfidf_lr_ready = True
+                    app.logger.info("✅ TF-IDF + LR model loaded from joblib")
+                except Exception as e:
+                    app.logger.error(f"Failed to load TF-IDF joblib: {e}")
+            else:
+                self.tfidf_lr = self.h5_loader.load_sklearn_model(tfidf_h5_path, 'TF-IDF + LR')
+                if self.tfidf_lr:
+                    self.tfidf_lr_ready = True
+                    app.logger.info("✅ TF-IDF + LR model loaded from h5")
+            
+            # Load Random Forest - try both .h5 and .joblib
+            rf_h5_path = os.path.join(self.models_dir, 'random_forest_model.h5')
+            rf_joblib_path = os.path.join(self.models_dir, 'random_forest_pipeline.joblib')
+            
+            if os.path.exists(rf_joblib_path):
+                app.logger.info(f"📂 Found RF joblib file: {rf_joblib_path}")
+                try:
+                    self.rf = joblib.load(rf_joblib_path)
+                    self.rf_ready = True
+                    app.logger.info("✅ Random Forest model loaded from joblib")
+                except Exception as e:
+                    app.logger.error(f"Failed to load RF joblib: {e}")
+            else:
+                self.rf = self.h5_loader.load_sklearn_model(rf_h5_path, 'Random Forest')
+                if self.rf:
+                    self.rf_ready = True
+                    app.logger.info("✅ Random Forest model loaded from h5")
+            
+            # Load LSTM only if TensorFlow is available
+            if TENSORFLOW_AVAILABLE:
+                self.lstm_data = self.h5_loader.load_lstm_model()
+                if self.lstm_data:
+                    self.lstm_ready = True
+                    app.logger.info("✅ LSTM model loaded and validated")
+                else:
+                    app.logger.warning("⚠️ LSTM model not available or validation failed")
+            else:
+                app.logger.info("ℹ️ Skipping LSTM model (TensorFlow not available)")
+            
+            # Set weights dynamically based on available models
+            self.set_dynamic_weights()
+            
+            active_models = sum([self.tfidf_lr_ready, self.rf_ready, self.lstm_ready])
+            
+            if active_models == 0:
+                app.logger.warning("⚠️ No models loaded, creating fallback models")
+                self.create_fallback_models()
+                active_models = sum([self.tfidf_lr_ready, self.rf_ready, self.lstm_ready])
+            
+            if active_models > 0:
+                self.update_model_name()
+                app.logger.info(f"✅ Ensemble ready with {active_models} active component(s)")
+                return True
+                
+        except Exception as e:
+            app.logger.error(f"Error loading ensemble: {e}")
+            self.create_fallback_models()
+        
+        return self.tfidf_lr_ready or self.rf_ready or self.lstm_ready
+    
+    def set_dynamic_weights(self):
+        """Set ensemble weights dynamically based on available models"""
+        available_models = []
+        if self.tfidf_lr_ready:
+            available_models.append('tfidf')
+        if self.rf_ready:
+            available_models.append('rf')
+        if self.lstm_ready:
+            available_models.append('lstm')
+        
+        # Set weights based on available models
+        if len(available_models) == 3:
+            # All models available - balanced ensemble
+            self.ensemble_weights = [0.35, 0.35, 0.30]  # TF-IDF, RF, LSTM
+        elif len(available_models) == 2:
+            if 'lstm' in available_models:
+                # LSTM + one other
+                if 'rf' in available_models:
+                    self.ensemble_weights = [0, 0.6, 0.4]  # RF + LSTM
+                else:
+                    self.ensemble_weights = [0.6, 0, 0.4]  # TF-IDF + LSTM
+            else:
+                # TF-IDF + RF
+                self.ensemble_weights = [0.5, 0.5, 0]
+        elif len(available_models) == 1:
+            # Single model
+            if self.lstm_ready:
+                self.ensemble_weights = [0, 0, 1.0]
+            elif self.rf_ready:
+                self.ensemble_weights = [0, 1.0, 0]
+            else:
+                self.ensemble_weights = [1.0, 0, 0]
+        else:
+            # No models - will use fallback
+            self.ensemble_weights = [0, 0, 0]
+        
+        app.logger.info(f"📊 Dynamic weights set: TF-IDF={self.ensemble_weights[0]:.1f}, RF={self.ensemble_weights[1]:.1f}, LSTM={self.ensemble_weights[2]:.1f}")
+    
+    def create_fallback_models(self):
+        """Create simple fallback models"""
+        if not SKLEARN_AVAILABLE:
+            app.logger.error("❌ Cannot create fallback models - scikit-learn not available")
+            return False
+        
+        try:
+            texts = [
+                'bagus sekali', 'sangat baik', 'memuaskan', 'luar biasa', 'recommended',
+                'buruk sekali', 'mengecewakan', 'tidak bagus', 'jelek', 'parah',
+                'biasa saja', 'standar', 'cukup', 'lumayan', 'oke'
+            ]
+            labels = ['positive']*5 + ['negative']*5 + ['neutral']*5
+            
+            if not self.tfidf_lr_ready:
+                try:
+                    self.tfidf_lr = Pipeline([
+                        ('tfidf', TfidfVectorizer(max_features=100)),
+                        ('classifier', LogisticRegression(random_state=42, max_iter=100))
+                    ])
+                    self.tfidf_lr.fit(texts, labels)
+                    self.tfidf_lr_ready = True
+                    app.logger.info("✅ Fallback TF-IDF + LR model created")
+                except Exception as e:
+                    app.logger.error(f"Failed to create fallback TF-IDF model: {e}")
+            
+            if not self.rf_ready:
+                try:
+                    self.rf = Pipeline([
+                        ('tfidf', TfidfVectorizer(max_features=100)),
+                        ('classifier', RandomForestClassifier(n_estimators=10, random_state=42))
+                    ])
+                    self.rf.fit(texts, labels)
+                    self.rf_ready = True
+                    app.logger.info("✅ Fallback Random Forest model created")
+                except Exception as e:
+                    app.logger.error(f"Failed to create fallback RF model: {e}")
+            
+            # Update weights after creating fallback models
+            self.set_dynamic_weights()
+            
+            return self.tfidf_lr_ready or self.rf_ready
+            
+        except Exception as e:
+            app.logger.error(f"Error creating fallback: {e}")
+            return False
+    
+    def update_model_name(self):
+        """Update model name based on active models"""
+        components = []
+        
+        if self.tfidf_lr_ready and self.ensemble_weights[0] > 0:
+            components.append(f"TF-IDF({self.ensemble_weights[0]:.0%})")
+        if self.rf_ready and self.ensemble_weights[1] > 0:
+            components.append(f"RF({self.ensemble_weights[1]:.0%})")
+        if self.lstm_ready and self.ensemble_weights[2] > 0:
+            components.append(f"LSTM({self.ensemble_weights[2]:.0%})")
+        
+        if components:
+            self.model_name = f"Ensemble: {'+'.join(components)}"
+        else:
+            self.model_name = "Rule-based Fallback"
+        
+        app.logger.info(f"📊 Model ensemble: {self.model_name}")
+    
+    def clean_text_simple(self, text):
+        """Simple text cleaning"""
+        if pd.isna(text) or text is None:
+            return ""
+        
+        text = str(text).lower()
+        text = re.sub(r'http\S+|www\.\S+', '', text)
+        text = re.sub(r'<.*?>', '', text)
+        text = re.sub(r'[^a-zA-Z0-9\s!?.,]', ' ', text)
+        text = re.sub(r'(.)\1{2,}', r'\1\1', text)
+        text = ' '.join(text.split())
+        
+        return text if text.strip() else "no content"
+    
+    def fallback_sentiment(self, text):
+        """Rule-based sentiment analysis fallback"""
+        if not text:
+            return 'neutral'
+        
+        text_lower = str(text).lower()
+        
+        positive_words = ['bagus', 'baik', 'indah', 'cantik', 'menarik', 'seru', 'asik', 'keren', 
+                         'mantap', 'puas', 'senang', 'suka', 'recommended', 'luar biasa']
+        negative_words = ['buruk', 'jelek', 'tidak bagus', 'mengecewakan', 'kecewa', 'mahal', 
+                         'kotor', 'jorok', 'bau', 'rusak', 'parah', 'zonk', 'rugi']
+        
+        pos_count = sum(1 for word in positive_words if word in text_lower)
+        neg_count = sum(1 for word in negative_words if word in text_lower)
+        
+        if pos_count > neg_count:
+            return 'positive'
+        elif neg_count > pos_count:
+            return 'negative'
+        else:
+            return 'neutral'
+    
+    @lru_cache(maxsize=1000)
+    def predict_single_cached(self, text):
+        """Cached prediction for single text"""
+        return self.predict_single(text, return_probabilities=False)
+    
+    def predict_single(self, text, return_probabilities=False):
+        """Predict sentiment for single text"""
+        try:
+            cleaned = self.clean_text_simple(text)
+            
+            if not cleaned:
+                return {
+                    'text': text,
+                    'sentiment': 'neutral',
+                    'confidence': 0.33,
+                    'model_used': 'empty_text'
+                }
+            
+            all_probs = []
+            models_used = []
+            
+            # TF-IDF + LR
+            if self.tfidf_lr_ready and self.tfidf_lr and self.ensemble_weights[0] > 0:
+                try:
+                    prob = self.tfidf_lr.predict_proba([cleaned])[0]
+                    all_probs.append(prob * self.ensemble_weights[0])
+                    models_used.append("TF-IDF")
+                except Exception as e:
+                    app.logger.debug(f"TF-IDF prediction failed: {e}")
+            
+            # Random Forest
+            if self.rf_ready and self.rf and self.ensemble_weights[1] > 0:
+                try:
+                    prob = self.rf.predict_proba([cleaned])[0]
+                    all_probs.append(prob * self.ensemble_weights[1])
+                    models_used.append("RF")
+                except Exception as e:
+                    app.logger.debug(f"RF prediction failed: {e}")
+            
+            # LSTM
+            if self.lstm_ready and self.lstm_data and TENSORFLOW_AVAILABLE and self.ensemble_weights[2] > 0:
+                try:
+                    tokenizer = self.lstm_data['tokenizer']
+                    max_len = self.lstm_data['max_len']
+                    model = self.lstm_data['model']
+                    
+                    seq = tokenizer.texts_to_sequences([cleaned])
+                    padded = pad_sequences(seq, maxlen=max_len, padding='post')
+                    prob = model.predict(padded, verbose=0)[0]
+                    
+                    # Ensure prob is valid
+                    if prob is not None and len(prob) == len(self.label_encoder_classes):
+                        all_probs.append(prob * self.ensemble_weights[2])
+                        models_used.append("LSTM")
+                    else:
+                        app.logger.warning("LSTM returned invalid prediction")
+                        
+                except Exception as e:
+                    app.logger.debug(f"LSTM prediction failed: {e}")
+            
+            # Combine predictions
+            if all_probs:
+                ensemble_prob = np.sum(all_probs, axis=0)
+                ensemble_prob = ensemble_prob / np.sum(ensemble_prob)
+                pred_idx = np.argmax(ensemble_prob)
+                
+                result = {
+                    'text': text,
+                    'sentiment': self.label_encoder_classes[pred_idx],
+                    'confidence': float(ensemble_prob[pred_idx]),
+                    'model_used': f"Ensemble ({'+'.join(models_used)})"
+                }
+                
+                if return_probabilities:
+                    result['probabilities'] = {
+                        self.label_encoder_classes[i]: float(p)
+                        for i, p in enumerate(ensemble_prob)
+                    }
+                
+                return result
+            else:
+                # Fallback to rule-based
+                sentiment = self.fallback_sentiment(text)
+                
+                result = {
+                    'text': text,
+                    'sentiment': sentiment,
+                    'confidence': 0.6,
+                    'model_used': 'Rule-based'
+                }
+                
+                if return_probabilities:
+                    if sentiment == 'positive':
+                        probs = {'negative': 0.1, 'neutral': 0.3, 'positive': 0.6}
+                    elif sentiment == 'negative':
+                        probs = {'negative': 0.6, 'neutral': 0.3, 'positive': 0.1}
+                    else:
+                        probs = {'negative': 0.2, 'neutral': 0.6, 'positive': 0.2}
+                    result['probabilities'] = probs
+                
+                return result
+                
+        except Exception as e:
+            app.logger.error(f"Prediction error: {e}")
+            return {
+                'text': text,
+                'sentiment': 'neutral',
+                'confidence': 0.33,
+                'model_used': 'error_fallback'
+            }
+    
+    def predict_batch(self, texts, batch_size=100):
+        """Optimized batch prediction with interrupt handling"""
+        global interrupt_received
+        results = []
+        total = len(texts)
+        
+        for i in range(0, total, batch_size):
+            # Check for interrupt
+            if interrupt_received:
+                app.logger.info(f"🛑 Interrupt detected during batch processing at {i}/{total}")
+                break
+                
+            batch = texts[i:i + batch_size]
+            batch_results = [self.predict_single(text) for text in batch]
+            results.extend(batch_results)
+            
+            if i % 1000 == 0 and i > 0:
+                app.logger.info(f"Processed {min(i + batch_size, total)}/{total} texts")
+                gc.collect()  # Clean up memory periodically
+        
+        return results
     """Production-optimized ensemble model - PERBAIKAN"""
     
     def __init__(self, models_dir=None):
