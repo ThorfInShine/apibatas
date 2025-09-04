@@ -1,14 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 import os
 import sys
+from pathlib import Path
 
-# Add backend directory to path
-sys.path.insert(0, '/var/www/html/batas.bpskotabatu.com/backend')
+# Add project directory to path
+sys.path.insert(0, str(Path(__file__).parent))
 
-# Set environment
+# Set environment variables
 os.environ['FLASK_ENV'] = 'production'
+os.environ['DEPLOYED'] = 'true'
 
-# Import Flask app
+# Import and configure app
 from app import app as application
 
 if __name__ == "__main__":

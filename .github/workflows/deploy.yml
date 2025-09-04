@@ -1,0 +1,76 @@
+name: Deploy to Hostinger
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+    
+    - name: Run tests
+      run: |
+        # Add your tests here
+        python -c "import app; print('App imports successfully')"
+    
+    - name: Check syntax
+      run: |
+        python -m py_compile app.py
+        python -m py_compile wsgi.py
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy to Hostinger
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.HOST }}
+        username: ${{ secrets.USERNAME }}
+        password: ${{ secrets.PASSWORD }}
+        port: ${{ secrets.PORT }}
+        script: |
+          # Navigate to project directory
+          cd /var/www/html/api.bpskotabatu.com
+          
+          # Pull latest changes
+          git pull origin main
+          
+          # Activate virtual environment
+          source venv/bin/activate
+          
+          # Install/update dependencies
+          pip install -r requirements.txt
+          
+          # Create necessary directories
+          mkdir -p data models_h5_fixed logs static/dist
+          
+          # Set permissions
+          chmod -R 755 data models_h5_fixed logs
+          
+          # Restart application
+          sudo systemctl restart batas-api
+          sudo systemctl restart nginx
+          
+          # Check status
+          sudo systemctl status batas-api --no-pager
