@@ -2,7 +2,7 @@ import multiprocessing
 import os
 
 # Server socket
-bind = f"0.0.0.0:{os.environ.get('PORT', 8000)}"
+bind = "127.0.0.1:8000"
 backlog = 2048
 
 # Worker processes
@@ -13,21 +13,19 @@ timeout = 120
 keepalive = 2
 
 # Logging
-accesslog = '/var/log/gunicorn/access.log'
-errorlog = '/var/log/gunicorn/error.log'
+accesslog = '/var/log/apibatas/access.log'
+errorlog = '/var/log/apibatas/error.log'
 loglevel = 'info'
-access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
 
 # Process naming
-proc_name = 'batas-api'
+proc_name = 'apibatas'
 
 # Server mechanics
 daemon = False
-pidfile = '/var/run/gunicorn.pid'
-user = None
-group = None
-tmp_upload_dir = None
+# PERBAIKAN: Pindahkan pid file ke tempat yang bisa diakses
+pidfile = '/var/www/apibatas.bpskotabatu.com/apibatas.pid'
+# Atau gunakan None jika tidak perlu pid file
+# pidfile = None
 
-# SSL (if needed)
-# keyfile = '/path/to/keyfile'
-# certfile = '/path/to/certfile'
+user = 'apibatas'
+group = 'www-data'
